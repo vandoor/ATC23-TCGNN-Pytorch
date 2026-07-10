@@ -155,8 +155,12 @@ std::vector<torch::Tensor> sddmm_forward(
 // Also, mapping the origin value to the corresponding new location in the new array.
 // 1->[0], 2->[1], 3->[2], 4->[3], 5->[4]. 
 std::map<unsigned, unsigned> inplace_deduplication(unsigned* array, unsigned length){
-    int loc=0, cur=1;
     std::map<unsigned, unsigned> nb2col;
+    if (length == 0) {
+        return nb2col;
+    }
+
+    unsigned loc = 0, cur = 1;
     nb2col[array[0]] = 0;
     while (cur < length){
         if(array[cur] != array[cur - 1]){
@@ -179,9 +183,52 @@ void preprocess(torch::Tensor edgeList_tensor,
                 torch::Tensor edgeToRow_tensor
                 ){
 
+    TORCH_CHECK(num_nodes >= 0, "num_nodes must be non-negative");
+    TORCH_CHECK(blockSize_h > 0, "blockSize_h must be positive");
+    TORCH_CHECK(blockSize_w > 0, "blockSize_w must be positive");
+    TORCH_CHECK(!edgeList_tensor.is_cuda(), "edgeList must be a CPU tensor");
+    TORCH_CHECK(!nodePointer_tensor.is_cuda(), "nodePointer must be a CPU tensor");
+    TORCH_CHECK(!blockPartition_tensor.is_cuda(), "blockPartition must be a CPU tensor");
+    TORCH_CHECK(!edgeToColumn_tensor.is_cuda(), "edgeToColumn must be a CPU tensor");
+    TORCH_CHECK(!edgeToRow_tensor.is_cuda(), "edgeToRow must be a CPU tensor");
+    TORCH_CHECK(edgeList_tensor.is_contiguous(), "edgeList must be contiguous");
+    TORCH_CHECK(nodePointer_tensor.is_contiguous(), "nodePointer must be contiguous");
+    TORCH_CHECK(blockPartition_tensor.is_contiguous(), "blockPartition must be contiguous");
+    TORCH_CHECK(edgeToColumn_tensor.is_contiguous(), "edgeToColumn must be contiguous");
+    TORCH_CHECK(edgeToRow_tensor.is_contiguous(), "edgeToRow must be contiguous");
+    TORCH_CHECK(edgeList_tensor.dim() == 1, "edgeList must be one-dimensional");
+    TORCH_CHECK(nodePointer_tensor.dim() == 1, "nodePointer must be one-dimensional");
+    TORCH_CHECK(blockPartition_tensor.dim() == 1, "blockPartition must be one-dimensional");
+    TORCH_CHECK(edgeToColumn_tensor.dim() == 1, "edgeToColumn must be one-dimensional");
+    TORCH_CHECK(edgeToRow_tensor.dim() == 1, "edgeToRow must be one-dimensional");
+    TORCH_CHECK(edgeList_tensor.scalar_type() == torch::kInt32, "edgeList must have dtype int32");
+    TORCH_CHECK(nodePointer_tensor.scalar_type() == torch::kInt32, "nodePointer must have dtype int32");
+    TORCH_CHECK(blockPartition_tensor.scalar_type() == torch::kInt32, "blockPartition must have dtype int32");
+    TORCH_CHECK(edgeToColumn_tensor.scalar_type() == torch::kInt32, "edgeToColumn must have dtype int32");
+    TORCH_CHECK(edgeToRow_tensor.scalar_type() == torch::kInt32, "edgeToRow must have dtype int32");
+    TORCH_CHECK(nodePointer_tensor.size(0) >= static_cast<int64_t>(num_nodes) + 1,
+                "nodePointer must contain at least num_nodes + 1 entries");
+
     // input tensors.
     auto edgeList = edgeList_tensor.accessor<int, 1>();
     auto nodePointer = nodePointer_tensor.accessor<int, 1>();
+
+    TORCH_CHECK(nodePointer[0] == 0, "nodePointer[0] must be zero");
+    for (int nid = 0; nid < num_nodes; ++nid) {
+        TORCH_CHECK(nodePointer[nid] >= 0 && nodePointer[nid] <= nodePointer[nid + 1],
+                    "nodePointer must be non-negative and non-decreasing");
+    }
+    const int64_t num_edges = nodePointer[num_nodes];
+    TORCH_CHECK(num_edges <= edgeList_tensor.size(0),
+                "nodePointer exceeds edgeList capacity");
+    const int64_t num_windows =
+        (static_cast<int64_t>(num_nodes) + blockSize_h - 1) / blockSize_h;
+    TORCH_CHECK(blockPartition_tensor.size(0) >= num_windows,
+                "blockPartition is smaller than the number of row windows");
+    TORCH_CHECK(edgeToColumn_tensor.size(0) >= num_edges,
+                "edgeToColumn is smaller than the CSR edge count");
+    TORCH_CHECK(edgeToRow_tensor.size(0) >= num_edges,
+                "edgeToRow is smaller than the CSR edge count");
 
     // output tensors.
     auto blockPartition = blockPartition_tensor.accessor<int, 1>();
@@ -197,11 +244,17 @@ void preprocess(torch::Tensor edgeList_tensor,
     }
 
     #pragma omp parallel for reduction(+:block_counter)
-    for (unsigned iter = 0; iter < num_nodes + 1; iter +=  blockSize_h){
-        unsigned windowId = iter / blockSize_h;
+    for (unsigned windowId = 0; windowId < num_windows; ++windowId){
+        unsigned iter = windowId * blockSize_h;
         unsigned block_start = nodePointer[iter];
         unsigned block_end = nodePointer[min(iter + blockSize_h, num_nodes)];
         unsigned num_window_edges = block_end - block_start;
+
+        if (num_window_edges == 0) {
+            blockPartition[windowId] = 0;
+            continue;
+        }
+
         unsigned *neighbor_window = (unsigned *) malloc (num_window_edges * sizeof(unsigned));
         memcpy(neighbor_window, &edgeList[block_start], num_window_edges * sizeof(unsigned));
 
@@ -221,6 +274,7 @@ void preprocess(torch::Tensor edgeList_tensor,
             unsigned eid = edgeList[e_index];
             edgeToColumn[e_index] = clean_edges2col[eid];
         }
+        free(neighbor_window);
     }
     printf("TC_Blocks:\t%d\nExp_Edges:\t%d\n", block_counter, block_counter * 8 * 16);
 }
@@ -236,6 +290,30 @@ void preprocess_gpu(torch::Tensor edgeList_tensor,
                 torch::Tensor edgeToRow_tensor
                 )
 {
+
+    TORCH_CHECK(num_nodes >= 0, "num_nodes must be non-negative");
+    TORCH_CHECK(blockSize_h > 0, "blockSize_h must be positive");
+    TORCH_CHECK(blockSize_w > 0, "blockSize_w must be positive");
+    CHECK_INPUT(edgeList_tensor);
+    CHECK_INPUT(nodePointer_tensor);
+    CHECK_INPUT(blockPartition_tensor);
+    CHECK_INPUT(edgeToColumn_tensor);
+    CHECK_INPUT(edgeToRow_tensor);
+    TORCH_CHECK(edgeList_tensor.scalar_type() == torch::kInt32, "edgeList must have dtype int32");
+    TORCH_CHECK(nodePointer_tensor.scalar_type() == torch::kInt32, "nodePointer must have dtype int32");
+    TORCH_CHECK(blockPartition_tensor.scalar_type() == torch::kInt32, "blockPartition must have dtype int32");
+    TORCH_CHECK(edgeToColumn_tensor.scalar_type() == torch::kInt32, "edgeToColumn must have dtype int32");
+    TORCH_CHECK(edgeToRow_tensor.scalar_type() == torch::kInt32, "edgeToRow must have dtype int32");
+    TORCH_CHECK(nodePointer_tensor.size(0) >= static_cast<int64_t>(num_nodes) + 1,
+                "nodePointer must contain at least num_nodes + 1 entries");
+    const int64_t num_windows =
+        (static_cast<int64_t>(num_nodes) + blockSize_h - 1) / blockSize_h;
+    TORCH_CHECK(blockPartition_tensor.size(0) >= num_windows,
+                "blockPartition is smaller than the number of row windows");
+    TORCH_CHECK(edgeToColumn_tensor.size(0) >= edgeList_tensor.size(0),
+                "edgeToColumn is smaller than edgeList");
+    TORCH_CHECK(edgeToRow_tensor.size(0) >= edgeList_tensor.size(0),
+                "edgeToRow is smaller than edgeList");
 
     // input tensors.
     auto edgeList = edgeList_tensor.data<int>();

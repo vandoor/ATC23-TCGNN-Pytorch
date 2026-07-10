@@ -45,13 +45,17 @@ __global__ void fill_window (int* edgeToColumn,
 							 int* edgeList, 
 							 int blockSize_h,
 							 int blockSize_w,
-							 int num_nodes
+							 int num_nodes,
+							 int window_count
 							)
 {
 		int tid = blockDim.x * blockIdx.x + threadIdx.x;
 
 		int winId = tid / 32;		// each warp one window
 		int lanid = tid % 32;
+		if (winId >= window_count) {
+			return;
+		}
 
         unsigned block_start = nodePointer[winId * blockSize_h];
         unsigned block_end = nodePointer[min(winId * blockSize_h + blockSize_h, num_nodes)];
@@ -80,6 +84,10 @@ __global__ void fill_window (int* edgeToColumn,
 }
 
 void fill_edgeToRow_cuda(int* edgeToRow, int *nodePointer, int num_nodes){
+	if (num_nodes == 0) {
+		return;
+	}
+
 	int wrap_size = 32; 
 	int block_size = 1024;
 	int grid_size =  (num_nodes * wrap_size + block_size - 1) / block_size;
@@ -106,10 +114,14 @@ void fill_window_cuda(	int* edgeToColumn,
 	int wrap_size = 32; 
 	int block_size = 1024;
 	int window_count = (num_nodes + blockSize_h - 1) / blockSize_h;
+	if (window_count == 0) {
+		return;
+	}
+
 	int grid_size =  (window_count * wrap_size + block_size - 1) / block_size;
 	// each warp will handle all neighbor for a TC block window (16 x 8)
 	fill_window <<< grid_size, block_size >>> (edgeToColumn, blockPartition, nodePointer, edgeList,
-																blockSize_h, blockSize_w, num_nodes);
+																blockSize_h, blockSize_w, num_nodes, window_count);
 	cudaError_t error = cudaGetLastError();
 	if(error != cudaSuccess)
 	{
