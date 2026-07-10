@@ -84,60 +84,55 @@ def test_tail_window(tcgnn):
     assert_tensor(edge_to_row, [0, 0, 1, 15, 16, 16, 16], "tail edgeToRow")
 
 
-def expect_runtime_error(call, label):
-    try:
-        call()
-    except RuntimeError:
-        return
-    raise AssertionError("{} did not raise RuntimeError".format(label))
-
-
 def test_capacity_checks(tcgnn):
     row_pointer = torch.tensor([0] * 17, dtype=torch.int32)
     empty = torch.empty(0, dtype=torch.int32)
     one_window = torch.zeros(1, dtype=torch.int32)
-
-    expect_runtime_error(
-        lambda: tcgnn.preprocess(
-            empty, row_pointer[:-1], 16, 16, 8, one_window, empty, empty
-        ),
-        "short nodePointer",
-    )
-    expect_runtime_error(
-        lambda: tcgnn.preprocess(
-            empty, row_pointer, 16, 16, 8, empty, empty, empty
-        ),
-        "short blockPartition",
-    )
-
     nonempty_rows = torch.tensor([0, 1] + [1] * 15, dtype=torch.int32)
     one_edge = torch.tensor([0], dtype=torch.int32)
-    expect_runtime_error(
-        lambda: tcgnn.preprocess(
-            one_edge,
-            nonempty_rows,
-            16,
-            16,
-            8,
-            one_window,
-            empty,
-            one_edge.clone(),
+
+    cases = [
+        (
+            "short nodePointer",
+            (empty, row_pointer[:-1], 16, 16, 8, one_window, empty, empty),
         ),
-        "short edgeToColumn",
-    )
-    expect_runtime_error(
-        lambda: tcgnn.preprocess(
-            one_edge,
-            nonempty_rows,
-            16,
-            16,
-            8,
-            one_window,
-            one_edge.clone(),
-            empty,
+        (
+            "short blockPartition",
+            (empty, row_pointer, 16, 16, 8, empty, empty, empty),
         ),
-        "short edgeToRow",
-    )
+        (
+            "short edgeToColumn",
+            (
+                one_edge,
+                nonempty_rows,
+                16,
+                16,
+                8,
+                one_window,
+                empty,
+                one_edge.clone(),
+            ),
+        ),
+        (
+            "short edgeToRow",
+            (
+                one_edge,
+                nonempty_rows,
+                16,
+                16,
+                8,
+                one_window,
+                one_edge.clone(),
+                empty,
+            ),
+        ),
+    ]
+    for label, arguments in cases:
+        try:
+            tcgnn.preprocess(*arguments)
+        except RuntimeError:
+            continue
+        raise AssertionError("{} did not raise RuntimeError".format(label))
 
 
 def run_synthetic(tcgnn):
