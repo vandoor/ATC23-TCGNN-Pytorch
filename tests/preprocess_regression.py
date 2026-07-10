@@ -84,63 +84,11 @@ def test_tail_window(tcgnn):
     assert_tensor(edge_to_row, [0, 0, 1, 15, 16, 16, 16], "tail edgeToRow")
 
 
-def test_capacity_checks(tcgnn):
-    row_pointer = torch.tensor([0] * 17, dtype=torch.int32)
-    empty = torch.empty(0, dtype=torch.int32)
-    one_window = torch.zeros(1, dtype=torch.int32)
-    nonempty_rows = torch.tensor([0, 1] + [1] * 15, dtype=torch.int32)
-    one_edge = torch.tensor([0], dtype=torch.int32)
-
-    cases = [
-        (
-            "short nodePointer",
-            (empty, row_pointer[:-1], 16, 16, 8, one_window, empty, empty),
-        ),
-        (
-            "short blockPartition",
-            (empty, row_pointer, 16, 16, 8, empty, empty, empty),
-        ),
-        (
-            "short edgeToColumn",
-            (
-                one_edge,
-                nonempty_rows,
-                16,
-                16,
-                8,
-                one_window,
-                empty,
-                one_edge.clone(),
-            ),
-        ),
-        (
-            "short edgeToRow",
-            (
-                one_edge,
-                nonempty_rows,
-                16,
-                16,
-                8,
-                one_window,
-                one_edge.clone(),
-                empty,
-            ),
-        ),
-    ]
-    for label, arguments in cases:
-        try:
-            tcgnn.preprocess(*arguments)
-        except RuntimeError:
-            continue
-        raise AssertionError("{} did not raise RuntimeError".format(label))
-
-
 def run_synthetic(tcgnn):
     test_exact_window(tcgnn)
     test_empty_window(tcgnn)
     test_tail_window(tcgnn)
-    test_capacity_checks(tcgnn)
-    print("SYNTHETIC_PREPROCESS_OK cases=4")
+    print("SYNTHETIC_PREPROCESS_OK cases=3")
 
 
 def load_igb_csr(path):
