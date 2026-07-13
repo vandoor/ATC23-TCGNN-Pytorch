@@ -26,6 +26,19 @@ std::vector<torch::Tensor> spmm_forward_cuda(
     torch::Tensor input
   );
 
+std::vector<torch::Tensor> spmm_forward_cuda_with_value(
+      torch::Tensor nodePointer,
+    torch::Tensor edgeList,
+    torch::Tensor blockPartition,
+    torch::Tensor edgeToColumn,
+    torch::Tensor edgeToRow,
+              int num_nodes,
+              int num_edges,
+              int embedding_dim,
+    torch::Tensor input,
+    torch::Tensor values
+  );
+
 std::vector<torch::Tensor> spmmAGNN_forward_cuda(
     torch::Tensor nodePointer,
     torch::Tensor edgeList,
@@ -83,6 +96,39 @@ std::vector<torch::Tensor> spmm_forward(
                             blockPartition, edgeToColumn, edgeToRow, 
                             num_nodes, num_edges, embedding_dim,
                             input);
+}
+
+std::vector<torch::Tensor> spmm_forward_with_value(
+    torch::Tensor input,
+    torch::Tensor values,
+    torch::Tensor nodePointer,
+    torch::Tensor edgeList,
+    torch::Tensor blockPartition,
+    torch::Tensor edgeToColumn,
+    torch::Tensor edgeToRow
+) {
+  CHECK_INPUT(input);
+  CHECK_CUDA(values);
+  CHECK_CONTIGUOUS(values);
+  CHECK_INPUT(nodePointer);
+  CHECK_INPUT(edgeList);
+  CHECK_INPUT(blockPartition);
+  CHECK_INPUT(edgeToColumn);
+  CHECK_INPUT(edgeToRow);
+  TORCH_CHECK(values.scalar_type() == torch::kFloat32,
+              "values must have dtype float32");
+  TORCH_CHECK(values.dim() == 1, "values must be one-dimensional");
+  TORCH_CHECK(values.size(0) == edgeList.size(0),
+              "values length must equal CSR nnz");
+
+  int num_nodes = nodePointer.size(0) - 1;
+  int num_edges = edgeList.size(0);
+  int embedding_dim = input.size(1);
+
+  return spmm_forward_cuda_with_value(nodePointer, edgeList,
+                                      blockPartition, edgeToColumn, edgeToRow,
+                                      num_nodes, num_edges, embedding_dim,
+                                      input, values);
 }
 
 ////////////////////////////////////////////
@@ -341,6 +387,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
   // forward computation
   m.def("forward", &spmm_forward, "TC-GNN SPMM forward (CUDA)");
+  m.def("forward_with_value", &spmm_forward_with_value,
+        "TC-GNN valued SPMM forward (CUDA)");
   m.def("forward_ef", &sddmm_forward, "TC-GNN SDDMM forward (CUDA)");
   m.def("forward_AGNN", &spmm_forward_AGNN, "TC-GNN SPMM (AGNN) forward (CUDA)");
 

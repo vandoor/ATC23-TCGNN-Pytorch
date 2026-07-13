@@ -72,6 +72,18 @@ Go to `TCGNN_conv/`, then run
 to install the TCGNN_conv modules with Pytorch binding. 
 **Note that this step is required for both Docker and Conda setup.**
 
+### Weighted SpMM API
+
+The extension exports both the original unweighted call and a valued CSR call:
+```
+output = TCGNN.forward_with_value(
+    input, values, row_ptr, col_idx,
+    block_partition, edge_to_column, edge_to_row,
+)[0]
+```
+`values` must be a contiguous one-dimensional CUDA FP32 tensor with one entry
+per CSR edge. The feature width must be divisible by 16.
+
 
 ### Download graph datasets.
 Get the preprocessed datasets in `.npy` at [here](https://storage.googleapis.com/graph_dataset/tcgnn-ae-graphs.tar.gz), 
